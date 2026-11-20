@@ -1,0 +1,62 @@
+# Single-node Kafka in KRaft mode (no ZooKeeper) for local development.
+# One container runs both roles: broker + controller ("combined mode").
+# Combined mode is for local dev only. Production uses separate controller nodes.
+
+services:
+  kafka:
+    image: apache/kafka:4.4.0        # pin a version; check hub.docker.com/r/apache/kafka for newer tags
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"                  # for apps on your laptop (Python producer/consumer)
+    environment:
+      # ---- KRaft identity ----
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # Optional: fixed cluster ID (generate with: docker run --rm apache/kafka:4.4.0 /opt/kafka/bin/kafka-storage.sh random-uuid)
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+      # ---- Listeners ----
+      # HOST       -> clients on your laptop        -> localhost:9092
+      # DOCKER     -> other containers (Airflow...) -> kafka:19092
+      # CONTROLLER -> KRaft controller traffic      -> kafka:9093 (internal only)
+      KAFKA_LISTENERS: HOST://0.0.0.0:9092,DOCKER://0.0.0.0:19092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: HOST:PLAINTEXT,DOCKER:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+
+      # ---- Required for a single-node cluster (default replication is 3) ----
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # ---- Dev-friendly defaults ----
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # create topics on purpose
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka_data:/var/lib/kafka/data           # keeps messages after restart
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # Optional: web UI to browse topics and messages at http://localhost:8080
+  kafka-ui:
+    image: kafbat/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+volumes:
+  kafka_data:
